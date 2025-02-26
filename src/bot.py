@@ -57,7 +57,7 @@ async def handle_voice(message: Message):
         audio_file = await openai_service.text_to_voice(response)
         audio_reply = FSInputFile(audio_file)
         logger.info(f"{type(audio_reply)}")
-        await message.reply_audio(audio_reply,f'response for {message.from_user.username}')
+        await message.answer_voice(voice=audio_reply, caption="Here is your response!")
     except Exception as e:
         logger.error(f"Error in handle_voice: {e}")
         await message.reply(f'Error: {e}')
