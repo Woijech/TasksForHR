@@ -1,3 +1,4 @@
+import aiofiles
 from aiogram.types import FSInputFile
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
@@ -11,13 +12,31 @@ import os
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-openai_service = OpenAIBot(api_key=settings.OPENAI_API_KEY)
+openai_service = OpenAIBot(api_key=settings.OPENAI_API_KEY, assistant_id=settings.OPENAI_ASSISTANT_ID)
 
 bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, timeout=60.0)
 dp = Dispatcher()
 
-async def initialize_assistant():
-    await openai_service.create_assistant()
+
+async def download_voice_file(file_id: str, file_name: str) -> str:
+    """
+    Скачивает голосовое сообщение и сохраняет его в файл.
+    Возвращает путь к сохраненному файлу.
+    """
+    try:
+        file = await bot.get_file(file_id)
+        file_path = file.file_path
+        downloaded_file = await bot.download_file(file_path)
+
+        async with aiofiles.open(file_name, "wb") as f:
+            await f.write(downloaded_file.read())
+
+        logger.info(f"{file_name} successfully downloaded.")
+        return file_name
+    except Exception as e:
+        logger.error(f"Error in downloading file: {e}")
+        raise
+
 
 @dp.message(Command("start"))
 async def start(message: Message):
@@ -44,7 +63,12 @@ async def help_command(message: Message):
 @dp.message(lambda message: message.voice is not None)
 async def handle_voice(message: Message):
     try:
-        text = await openai_service.voice_to_text(message.voice.file_id, bot)
+        file_id = message.voice.file_id
+        ogg_file_name = f"voice_message_{file_id}.ogg"
+
+        await download_voice_file(file_id, ogg_file_name)
+
+        text = await openai_service.voice_to_text(ogg_file_name)
         if not text:
             await message.reply("Failed to recognize the voice.")
             logger.warning("Voice recognition failed")
@@ -57,11 +81,14 @@ async def handle_voice(message: Message):
         audio_file = await openai_service.text_to_voice(response)
         audio_reply = FSInputFile(audio_file)
         logger.info(f"{type(audio_reply)}")
-        await message.reply_audio(audio_reply,f'response for {message.from_user.username}')
+        await message.answer_voice(voice=audio_reply, caption="Here is your response!")
     except Exception as e:
         logger.error(f"Error in handle_voice: {e}")
         await message.reply(f'Error: {e}')
     finally:
+        if ogg_file_name and os.path.exists(ogg_file_name):
+            os.remove(ogg_file_name)
+            logger.info(f"Временный файл {ogg_file_name} удален.")
         if os.path.exists(audio_file):
             os.remove(audio_file)
             logger.info(f"Temp file {audio_file} removed")
@@ -69,7 +96,6 @@ async def handle_voice(message: Message):
 
 async def main():
     logger.info("Starting bot")
-    await initialize_assistant()
     await dp.start_polling(bot)
 
 
