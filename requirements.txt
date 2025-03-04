@@ -1,0 +1,6 @@
+pydantic-settings~=2.8.0
+aiogram~=3.18.0
+openai~=1.64.0
+aiofiles~=24.1.0
+SQLAlchemy~=2.0.38
+alembic~=1.14.1
