@@ -40,7 +40,9 @@ async def download_voice_file(file_id: str, file_name: str) -> str:
 async def start(message: Message):
     try:
         await message.answer(
-            f"Hello, {message.from_user.first_name}! Send me a voice or type /help to get started."
+            f"Hello, {message.from_user.first_name}! Send me"
+            f""
+            f" a voice or type /help to get started."
         )
         logger.info(f"Sent welcome message to {message.from_user.username}")
     except Exception as e:
@@ -81,15 +83,7 @@ async def handle_voice(message: Message):
         await download_voice_file(file_id, ogg_file_name)
 
         text = await openai_service.voice_to_text(ogg_file_name)
-        if not text:
-            await message.reply("Failed to recognize the voice.")
-            logger.warning("Voice recognition failed")
-            return
         response = await openai_service.get_answer(message.from_user.id, text)
-        if not response:
-            await message.reply("Failed to translate voice to text.")
-            logger.warning("Voice to text translation failed")
-            return
         audio_file = await openai_service.text_to_voice(response)
         audio_reply = FSInputFile(audio_file)
         logger.info(f"{type(audio_reply)}")
