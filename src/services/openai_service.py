@@ -1,20 +1,73 @@
-import asyncio
 import aiofiles
 from uuid import uuid4
 import logging
 from openai import AsyncOpenAI
 from src.database.services import save_value
 import json
+from amplitude import Amplitude, BaseEvent
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
+amplitude_executor = ThreadPoolExecutor(max_workers=1)
+
+
 
 class OpenAIBot:
-    def __init__(self, api_key: str, assistant_id: str = None):
+    def __init__(self, api_key: str, assistant_id: str = None,amplitude_key: str = None):
         self.client = AsyncOpenAI(api_key=api_key)
         self.user_threads = {}
         self.assistant_id = assistant_id
+        self.amplitude_client = Amplitude(api_key=amplitude_key)
         logger.info("OpenAIBot initialized with API key")
         logger.info(f"Assistant ID: {self.assistant_id}")
+
+    async def analyze_mood_from_photo(self, image_url: str, user_id: int):
+        try:
+            amplitude_executor.submit(
+                self.amplitude_client.track,
+                BaseEvent(
+                    event_type="photo_uploaded",
+                    user_id=str(user_id),
+                    event_properties={"image_url": image_url},
+                ),
+            )
+            response = await self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text",
+                             "text": "Определи настроение человека на фото. Ответь одним словом: счастье, грусть, злость, нейтрально, удивление.Если не получится определить настроение верни сообщение Не удалось определить настроение."},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_url}",}},
+                        ],
+                    }
+                ],
+                max_tokens=300,
+            )
+            mood = response.choices[0].message.content
+            logger.info(f"Mood analysis result for user {user_id}: {mood}")
+            amplitude_executor.submit(
+                self.amplitude_client.track,
+                BaseEvent(
+                    event_type="photo_analyzed",
+                    user_id=str(user_id),
+                    event_properties={"mood": mood},
+                ),
+            )
+
+            return mood
+        except Exception as e:
+            logger.error(f"Error in analyze_mood_from_photo: {e}", exc_info=True)
+            amplitude_executor.submit(
+                self.amplitude_client.track,
+                BaseEvent(
+                    event_type="photo_analysis_failed",
+                    user_id=str(user_id),
+                    event_properties={"error": str(e)},
+                ),
+            )
+            return "Не удалось определить настроение."
 
     async def voice_to_text(self, audio_file_path):
         try:
@@ -149,74 +202,61 @@ class OpenAIBot:
             )
             logger.info(f"Run started for user {user_id}: {response.id}")
 
-            max_retries = 30
-            retry_count = 0
+            if response.status == "requires_action":
+                tool_calls = response.required_action.submit_tool_outputs.tool_calls
+                tool_outputs = []
 
-            while retry_count < max_retries:
-                if response.status == "requires_action":
-                    tool_calls = response.required_action.submit_tool_outputs.tool_calls
-                    tool_outputs = []
+                for tool_call in tool_calls:
+                    function_name = tool_call.function.name
+                    function_args = json.loads(tool_call.function.arguments)
 
-                    for tool_call in tool_calls:
-                        function_name = tool_call.function.name
-                        function_args = json.loads(tool_call.function.arguments)
+                    if function_name == "validate_value":
+                        validation_result = await self.validate_value(function_args["value"])
+                        tool_outputs.append({
+                            "tool_call_id": tool_call.id,
+                            "output": json.dumps(validation_result),
+                        })
+                        if validation_result["is_valid"]:
+                            await save_value(user_id=user_id, value=validation_result["value_type"])
+                            logger.info(f"Value saved for user {user_id}: {validation_result['value_type']}")
 
-                        if function_name == "validate_value":
-                            validation_result = await self.validate_value(function_args["value"])
-                            tool_outputs.append({
-                                "tool_call_id": tool_call.id,
-                                "output": json.dumps(validation_result),
-                            })
-                            if validation_result["is_valid"]:
-                                await save_value(user_id=user_id, value=validation_result["value_type"])
-                                logger.info(f"Value saved for user {user_id}: {validation_result['value_type']}")
+                    elif function_name == "save_value":
+                        await save_value(user_id=function_args["user_id"], value=function_args["value"])
+                        tool_outputs.append({
+                            "tool_call_id": tool_call.id,
+                            "output": json.dumps({"status": "success"}),
+                        })
 
-                        elif function_name == "save_value":
-                            await save_value(user_id=function_args["user_id"], value=function_args["value"])
-                            tool_outputs.append({
-                                "tool_call_id": tool_call.id,
-                                "output": json.dumps({"status": "success"}),
-                            })
-
-                    await self.client.beta.threads.runs.submit_tool_outputs(
-                        thread_id=self.user_threads[user_id],
-                        run_id=response.id,
-                        tool_outputs=tool_outputs
-                    )
-                    logger.info(f"Tool outputs submitted for run {response.id}")
-
-                elif response.status == "completed":
-                    messages = await self.client.beta.threads.messages.list(
-                        thread_id=self.user_threads[user_id],
-                    )
-                    for message in messages.data:
-                        if message.role == "assistant":
-                            assistant_message = message.content[0].text.value
-                            logger.info(f"Received answer for user {user_id}: {assistant_message}")
-                            return assistant_message
-                    logger.warning("No assistant message found in the thread.")
-                    return "Sorry, I couldn't generate a response."
-
-                elif response.status in ["failed", "cancelled"]:
-                    logger.warning(f"Run failed or was cancelled: {response.status}")
-                    return "Sorry, I couldn't process your request."
-
-                elif response.status in ["queued", "in_progress"]:
-                    logger.info(f"Run is {response.status}. Waiting...")
-                    await asyncio.sleep(1)
-                    retry_count += 1
-
-                else:
-                    logger.warning(f"Unexpected run status: {response.status}")
-                    return "Sorry, something went wrong."
-
+                await self.client.beta.threads.runs.submit_tool_outputs(
+                    thread_id=self.user_threads[user_id],
+                    run_id=response.id,
+                    tool_outputs=tool_outputs
+                )
+                logger.info(f"Tool outputs submitted for run {response.id}")
                 response = await self.client.beta.threads.runs.retrieve(
                     thread_id=self.user_threads[user_id],
                     run_id=response.id
                 )
 
-            logger.warning(f"Max retries ({max_retries}) exceeded. Run status: {response.status}")
-            return "Sorry, the request took too long to process."
+            if response.status == "completed":
+                messages = await self.client.beta.threads.messages.list(
+                    thread_id=self.user_threads[user_id],
+                )
+                for message in messages.data:
+                    if message.role == "assistant":
+                        assistant_message = message.content[0].text.value
+                        logger.info(f"Received answer for user {user_id}: {assistant_message}")
+                        return assistant_message
+                logger.warning("No assistant message found in the thread.")
+                return "Sorry, I couldn't generate a response."
+
+            elif response.status in ["failed", "cancelled"]:
+                logger.warning(f"Run failed or was cancelled: {response.status}")
+                return "Sorry, I couldn't process your request."
+
+            else:
+                logger.warning(f"Unexpected run status: {response.status}")
+                return "Sorry, something went wrong."
 
         except Exception as e:
             logger.error(f"Error in get_answer: {e}", exc_info=True)

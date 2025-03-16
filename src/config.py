@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str | None = None
     OPENAI_ASSISTANT_ID: str | None = None
     DATABASE_URL :str | None = None
+    OPENAI_AMPLITUDE_KEY: str | None = None
     class Config:
         env_file = '../.env'
         env_file_encoding = "utf-8"
