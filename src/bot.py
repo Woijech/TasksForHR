@@ -1,4 +1,7 @@
 import aiofiles
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage import redis
+from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import FSInputFile
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
@@ -13,7 +16,13 @@ import os
 import base64
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
+redis_connection = redis.Redis(
+    host=settings.REDIS_HOST,
+    port=settings.REDIS_PORT,
+    password=settings.REDIS_PASSWORD,
+    db=settings.REDIS_DB
+)
+storage = RedisStorage(redis=redis_connection)
 openai_service = OpenAIBot(api_key=settings.OPENAI_API_KEY, assistant_id=settings.OPENAI_ASSISTANT_ID,amplitude_key=settings.OPENAI_AMPLITUDE_KEY)
 
 bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, timeout=60.0)
@@ -79,7 +88,8 @@ async def show_user_values(message: Message):
 
 
 @dp.message(lambda message: message.voice is not None)
-async def handle_voice(message: Message):
+@dp.message(lambda message: message.voice is not None)
+async def handle_voice(message: Message, state: FSMContext):
     try:
         file_id = message.voice.file_id
         ogg_file_name = f"voice_message_{file_id}.ogg"
@@ -87,7 +97,7 @@ async def handle_voice(message: Message):
         await download_file(file_id, ogg_file_name)
 
         text = await openai_service.voice_to_text(ogg_file_name)
-        response = await openai_service.get_answer(message.from_user.id, text)
+        response = await openai_service.get_answer(message.from_user.id, text, state)
         audio_file = await openai_service.text_to_voice(response)
         audio_reply = FSInputFile(audio_file)
         logger.info(f"{type(audio_reply)}")

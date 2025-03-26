@@ -4,3 +4,4 @@ openai~=1.64.0
 aiofiles~=24.1.0
 SQLAlchemy~=2.0.38
 alembic~=1.14.1
+Booktype~=1.5

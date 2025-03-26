@@ -2,11 +2,23 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    TELEGRAM_BOT_TOKEN: str | None = None
-    OPENAI_API_KEY: str | None = None
-    OPENAI_ASSISTANT_ID: str | None = None
-    DATABASE_URL :str | None = None
-    OPENAI_AMPLITUDE_KEY: str | None = None
+    TELEGRAM_BOT_TOKEN: str
+    OPENAI_API_KEY: str
+    OPENAI_ASSISTANT_ID: str
+    OPENAI_AMPLITUDE_KEY: str
+
+    # Redis
+    REDIS_HOST: str
+    REDIS_PORT: int
+    REDIS_PASSWORD: str
+    REDIS_DB: int
+
+    # MySQL
+    MYSQL_HOST: str
+    MYSQL_PORT: int
+    MYSQL_DATABASE: str
+    MYSQL_USER: str
+    MYSQL_PASSWORD: str
     class Config:
         env_file = '../.env'
         env_file_encoding = "utf-8"
